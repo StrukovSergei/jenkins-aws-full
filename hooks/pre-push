@@ -1,0 +1,15 @@
+#!/bin/sh
+
+# Run pylint
+echo "Running pylint..."
+pylint $(git ls-files '*.py')
+
+# Check if pylint passed
+if [ $? -ne 0 ]; then
+  echo "pylint failed. Aborting push."
+  exit 1
+fi
+
+echo "pylint passed. Proceeding with push."
+exit 0
+

@@ -1,0 +1,13 @@
+[Unit]
+Description=Gunicorn instance to serve Weather_app
+After=network.target
+
+[Service]
+User=ubuntu
+Group=www-data
+WorkingDirectory=/home/ubuntu/sergei.strukov/python/Weather_app
+Environment="PATH=/home/ubuntu/sergei.strukov/python/Weather_app/myprojectenv/bin"
+ExecStart=/home/ubuntu/sergei.strukov/python/Weather_app/myprojectenv/bin/gunicorn --workers 3 --bind unix:Weather_app.sock -m 007 wsgi:app
+
+[Install]
+WantedBy=multi-user.target

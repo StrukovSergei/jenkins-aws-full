@@ -1,0 +1,173 @@
+pipeline {
+    agent { label 'agent2' }
+    environment {
+        BUILD_ID = "${currentBuild.number}"
+        SSH_CONNECTION = "ubuntu@172.31.37.220"
+        AWS_DEFAULT_REGION = 'il-central-1'
+        CLUSTER_NAME = 'EKS-Cluster'
+        AWS_CREDENTIALS_ID = '22f36eff-2b9d-404b-be0f-a3338acfe3a6'
+    }
+
+    stages {
+        stage('Prepare Env') {
+            steps {
+                script {
+                    //prepare env: install kubectl, awscli, python3 dependencies needed for tests
+                    sh "chmod +x prepare_env.sh"
+                    sh "prepare_env.sh"
+                }
+            }
+        }
+
+        stage("Read and Increment Version") {
+            steps {
+                script {
+
+                    // Get the latest commit message
+                    def commitMessage = sh(
+                        script: 'git log -1 --pretty=%B',
+                        returnStdout: true
+                    ).trim()
+                    echo "Latest commit message: ${commitMessage}"
+
+                    // Get the current branch name
+                    def branch = sh(
+                        script: 'git rev-parse --abbrev-ref HEAD',
+                        returnStdout: true
+                    ).trim()
+                    echo "Current branch: ${branch}"
+
+                    sh 'git clone git@github.com:StrukovSergei/weatherapp-k8s.git'
+                    def version = sh(script: '''
+                        cd weatherapp-k8s
+                        yq eval '.spec.template.spec.containers[0].image' deployment.yaml | awk -F: '{print $2}'
+                    ''', returnStdout: true).trim()
+                    echo "The version is: ${version}"
+
+                    // Split the version into major, minor, patch
+                    def (major, minor, patch) = version.tokenize('.').collect { it as int }
+
+                    // Determine which part of the version to increment
+                    if (branch == 'master' && commitMessage.contains('MAJOR')) {
+                        major += 1
+                        minor = 0
+                        patch = 0
+                    } else if (branch == 'dev' || commitMessage.contains('MINOR')) {
+                        minor += 1
+                        patch = 0
+                    } else if (branch == 'hotfix' || commitMessage.contains('PATCH')) {
+                        patch += 1
+                    } else {
+                        // Default increment type is PATCH if no specific branch merge is detected
+                        patch += 1
+                    }
+                    echo "Version increment type determined by branch and commit message"
+
+                    // Construct the new version string
+                    def newVersion = "${major}.${minor}.${patch}"
+                    echo "New version: ${newVersion}"
+                    env.VERSION = newVersion
+
+                }
+            }
+        }
+
+        stage("Build") {
+            steps {
+                echo 'Start building the project docker image'
+                sh 'sudo docker compose build'
+            }
+        }
+        stage("Run Tests") {
+            steps {
+                echo 'Run tests in the docker image'
+                sh 'sudo docker compose up -d'
+                sleep(time: 3, unit: "SECONDS")
+                sh 'python3 tests/site-reachable.py'
+                sh 'export hostIP=$(ip route | awk '/default/ { print $3 }')'
+                sh 'HOST_IP=$hostIP python3 selenium_test.py'
+                sh 'sudo docker compose down'
+            }
+        }
+        stage("Push to DockerHub") {
+            steps {
+                script {
+                    def imageName = "strukovsergei/weatherapp:${env.VERSION}"
+                    sh "sudo docker tag strukovsergei/weatherapp:latest ${imageName}"
+                    docker.withRegistry('https://index.docker.io/v1/', 'dockerhub') {
+                        docker.image("strukovsergei/weatherapp:latest").push()
+                    }
+                }
+            }
+        }
+        stage("update version") {
+            steps {
+                script {
+                    sh 'cd weatherapp-k8s && git config user.email "strukov.sergei.999@gmail.com" && git config user.name "StrukovSergei"'
+                    sh 'yq eval '.spec.template.spec.containers[0].image = "strukovsergei/weatherapp:${env.VERSION}"' -i weatherapp-k8s/deployment.yaml'
+                    sh 'cd weatherapp-k8s && git add deployment.yaml && git commit -m "increment version to ${newVersion}"'
+                    sh 'cd weatherapp-k8s && git push https://github.com/StrukovSergei/weatherapp-k8s HEAD:main'
+                }
+            }
+        }
+        stage('Deploy') {
+            steps {
+                sh '''
+                    aws eks update-kubeconfig --name EKS-Cluster --region il-central-1
+
+                    # Check if the namespace exists
+                    if ! kubectl get namespace argocd &> /dev/null; then
+                        kubectl create namespace argocd
+                    fi
+
+                    # Install Argo CD only if it's not already installed
+                    if ! kubectl get svc argocd-server -n argocd &> /dev/null; then
+                        kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/v2.8.4/manifests/install.yaml
+                        kubectl patch svc argocd-server -n argocd -p '{"spec": {"type": "LoadBalancer"}}'
+                        sleep 40
+                    fi
+
+                    ARGOCD_SERVER=$(kubectl get svc argocd-server -n argocd -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+                    PASS=$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d; echo)
+
+                    # Login to Argo CD
+                    argocd login $ARGOCD_SERVER --username admin --password $PASS --insecure
+
+                    # Check if the application already exists
+                    if ! argocd app get weather-app &> /dev/null; then
+                        argocd app create weather-app --repo https://github.com/StrukovSergei/weatherapp-k8s --path . --dest-server https://kubernetes.default.svc --dest-namespace default
+                    fi
+
+                    # Sync the application
+                    argocd app sync weather-app
+                '''
+            }
+        }
+
+        stage("Clean") {
+            steps {
+                sh 'yes | sudo docker container prune'
+            }
+        }
+    }
+    post {
+        always {
+            cleanWs() // Clean up workspace
+        }
+        success {
+            slackSend channel: 'succeeded-build',
+            color: 'good',
+            message: "Status of Pipeline: ${currentBuild.currentResult} ${env.JOB_NAME} ${env.BUILD_ID}"
+        }
+        failure {
+            slackSend channel: 'devops-alerts',
+            color: 'danger',
+            message: "Status of Pipeline: ${currentBuild.currentResult} ${env.JOB_NAME} ${env.BUILD_ID}"
+        }
+        unstable {
+            slackSend channel: 'devops-alerts',
+            color: 'danger',
+            message: "Status of Pipeline: ${currentBuild.currentResult} ${env.JOB_NAME} ${env.BUILD_ID}"
+        }
+    }
+}
