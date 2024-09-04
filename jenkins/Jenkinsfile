@@ -19,10 +19,28 @@ pipeline {
             }
         }
 
+        stage("Build") {
+            steps {
+                echo 'Start building the project docker image'
+                sh 'sudo docker compose build'
+            }
+        }
+
+        stage("Run Tests") {
+            steps {
+                echo 'Run tests in the docker image'
+                sh 'sudo docker compose up -d'
+                sleep(time: 3, unit: "SECONDS")
+                sh 'python3 tests/site-reachable.py'
+                sh 'export hostIP=$(ip route | awk '/default/ { print $3 }')'
+                sh 'HOST_IP=$hostIP python3 selenium_test.py'
+                sh 'sudo docker compose down'
+            }
+        }
+
         stage("Read and Increment Version") {
             steps {
                 script {
-
                     // Get the latest commit message
                     def commitMessage = sh(
                         script: 'git log -1 --pretty=%B',
@@ -67,28 +85,10 @@ pipeline {
                     def newVersion = "${major}.${minor}.${patch}"
                     echo "New version: ${newVersion}"
                     env.VERSION = newVersion
-
                 }
             }
         }
 
-        stage("Build") {
-            steps {
-                echo 'Start building the project docker image'
-                sh 'sudo docker compose build'
-            }
-        }
-        stage("Run Tests") {
-            steps {
-                echo 'Run tests in the docker image'
-                sh 'sudo docker compose up -d'
-                sleep(time: 3, unit: "SECONDS")
-                sh 'python3 tests/site-reachable.py'
-                sh 'export hostIP=$(ip route | awk '/default/ { print $3 }')'
-                sh 'HOST_IP=$hostIP python3 selenium_test.py'
-                sh 'sudo docker compose down'
-            }
-        }
         stage("Push to DockerHub") {
             steps {
                 script {
@@ -100,6 +100,7 @@ pipeline {
                 }
             }
         }
+
         stage("update version") {
             steps {
                 script {
@@ -110,6 +111,7 @@ pipeline {
                 }
             }
         }
+
         stage('Deploy') {
             steps {
                 sh '''
@@ -150,6 +152,7 @@ pipeline {
             }
         }
     }
+
     post {
         always {
             cleanWs() // Clean up workspace
