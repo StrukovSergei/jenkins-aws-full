@@ -75,8 +75,7 @@ $`\textcolor{green}{\text{6. Deploy to EKS}}`$: Updates the Kubernetes configura
 $`\textcolor{green}{\text{7. Cleanup}}`$: Removes the Docker image from the local Docker registry to free up space.
 
 <!-- Pipeline Flow Section -->
-<details>
-  <summary>Pipeline Flow</summary>
+## Pipeline Flow
   
 <p align="center">
   <img src="assets/flow.jpeg" alt="Flow">
