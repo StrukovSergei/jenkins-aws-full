@@ -1,13 +1,12 @@
 module "eks" {
   source          = "terraform-aws-modules/eks/aws"
   version         = "20.8.5"
-  cluster_name    = local.cluster_name
+
+  cluster_name    = var.cluster_name
   cluster_version = "1.30"
-
-
-  cluster_endpoint_public_access           = true
+  cluster_endpoint_public_access = true
   enable_cluster_creator_admin_permissions = true
-  
+
   subnet_ids = module.vpc.private_subnets
   vpc_id     = module.vpc.vpc_id
 
@@ -18,9 +17,6 @@ module "eks" {
   }
 
   cluster_addons = {
-    //aws-ebs-csi-driver = {
-    //  service_account_role_arn = module.irsa-ebs-csi.iam_role_arn
-    //}
     coredns = {
       most_recent = true
     }
@@ -32,42 +28,33 @@ module "eks" {
     }
   }
 
-
   eks_managed_node_group_defaults = {
     disk_size = 8
   }
-  
+
   eks_managed_node_groups = {
     one = {
       name = "node-group-1"
-
       instance_types = ["t3.micro"]
-
       min_size     = 7
       max_size     = 10
       desired_size = 8
-      
-          labels = {
+      labels = {
         role = "prod"
       }
     }
-
     two = {
       name = "node-group-2"
-
       instance_types = ["t3.micro"]
-
       min_size     = 7
       max_size     = 10
       desired_size = 8
-      
-          labels = {
+      labels = {
         role = "dev"
       }
     }
   }
 }
-
 
 //data "aws_iam_policy" "ebs_csi_policy" {
 //  arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
