@@ -2,13 +2,14 @@ terraform {
   backend "s3" {
     bucket = "test-terraform13"
     key    = "path/to/my/key"
-    region = "il-central-1"
+    region = var.region
   }
 }
-provider "aws" {
-  region     = "il-central-1"
 
+provider "aws" {
+  region = var.region
 }
+
 data "aws_availability_zones" "azs" {
   state = "available"
 }
